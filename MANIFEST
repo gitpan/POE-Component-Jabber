@@ -1,0 +1,8 @@
+ChangeLog
+MANIFEST
+Makefile.PL
+examples/presence.pl
+lib/POE/Component/Jabber.pm
+lib/POE/Component/Jabber/Auth.pm
+lib/POE/Filter/Jabber.pm
+test.pl
