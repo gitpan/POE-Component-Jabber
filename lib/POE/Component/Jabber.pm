@@ -13,7 +13,7 @@ use Digest::SHA1 qw( sha1_hex );
 use vars qw( $VERSION );
 use constant JABBER_PORT => 5222;
 
-our $VERSION = '0.1';
+our $VERSION = '0.2';
 
 sub new {
     my( $package, $alias ) = splice @_, 0, 2;
