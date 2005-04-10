@@ -83,13 +83,15 @@ sub check_route()
 	
 	my ($jid, $reso) = split('/', $fjid);
 
-	if(not defined($reso))
+	if(not defined($reso) and not $bool)
 	{
 		my $sid = $self->{'JIDS'}->{$jid}->{'default'};
 		my $sjid = $self->{'SIDS'}->{$sid};
 		
 		(undef, $reso) = split('/', $sjid);
 	}
+
+	$reso = '' unless defined($reso);
 
 	if(exists($self->{'JIDS'}->{$jid}->{'resources'}->{$reso}))
 	{

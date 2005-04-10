@@ -1,9 +1,9 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         POE-Component-Jabber
-version:      1.0
+version:      1.1
 version_from: lib/POE/Component/Jabber.pm
-installdirs:  vendor
+installdirs:  site
 requires:
     Authen::SASL:                  2.06
     Digest::SHA1:                  2.01
@@ -13,4 +13,4 @@ requires:
     POE::Filter::XML:              0.2
 
 distribution_type: module
-generated_by: ExtUtils::MakeMaker version 6.17
+generated_by: ExtUtils::MakeMaker version 6.26

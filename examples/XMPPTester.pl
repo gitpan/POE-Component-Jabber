@@ -9,32 +9,37 @@ use strict;
 use POE qw/ Component::Jabber::Client::XMPP Component::Jabber::Error /;
 use POE::Filter::XML::Node;
 use POE::Filter::XML::NS qw/ :JABBER :IQ /;
-
+use List::Util qw/ shuffle /;
 
 POE::Session->create(
-	options => { debug => 1, trace => 1},
+	options => { debug => 0, trace => 0},
 	inline_states => {
 		_start =>
 			sub
 			{
-				my $kernel = $_[KERNEL];
+				my ($kernel, $heap) = @_[KERNEL, HEAP];
 				$kernel->alias_set('Tester');
-				POE::Component::Jabber::Client::XMPP->new(
-					IP => 'localhost',
-					PORT => '5222',
-					HOSTNAME => 'localhost',
-					USERNAME => 'test01',
-					PASSWORD => 'password',
-					ALIAS => 'COMPONENT',
-					DEBUG => '1',
-					STATE_PARENT => 'Tester',
-					STATES => {
-						InitFinish => 'init_finished',
-						InputEvent => 'input_event',
-						ErrorEvent => 'error_event',
-					}
-				);
-						
+				$heap->{'rand'} = [];
+				$heap->{'jids'} = {};
+				
+				foreach my $index (0..200)
+				{
+					POE::Component::Jabber::Client::XMPP->new(
+						IP => 'localhost',
+						PORT => '5222',
+						HOSTNAME => 'localhost',
+						USERNAME => 'test01',
+						PASSWORD => 'test01',
+						ALIAS => 'COMPONENT'.$index,
+						DEBUG => '0',
+						STATE_PARENT => 'Tester',
+						STATES => {
+							InitFinish => 'init_finished',
+							InputEvent => 'input_event',
+							ErrorEvent => 'error_event',
+						}
+					);
+				}
 			},
 		_stop =>
 			sub
@@ -42,6 +47,8 @@ POE::Session->create(
 				my $kernel = $_[KERNEL];
 				$kernel->alias_remove();
 			},
+
+		delay_start => \&delay_start,
 		input_event => \&input_event,
 		error_event => \&error_event,
 		init_finished => \&init_finished,
@@ -54,64 +61,86 @@ POE::Session->create(
 
 sub init_finished()
 {
-	my ($kernel, $heap, $jid) = @_[KERNEL, HEAP, ARG0];
+	my ($kernel, $sender, $heap, $jid) = @_[KERNEL, SENDER, HEAP, ARG0];
 	
-	print "INIT FINISHED!\n";
-	print "MY JID: $jid \n\n";
-	$heap->{'jid'} = $jid;
-	$kernel->yield('test_message');
+#	print "INIT FINISHED!\n";
+#	print "JID: $jid \n";
+#	print "SID: ".$sender->ID()."\n\n";
+	
+	push(@{$heap->{'rand'}}, $jid);
+	$heap->{'jids'}->{$jid} = $sender->ID();
+	
+	if($#{$heap->{'rand'}} == 100)
+	{	
+		warn "100 sockets reached";
+		$kernel->delay_add('test_message', int(rand(10)));
+	}
+	
 }
 
 sub input_event()
 {
 	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 	
-	print "\n===PACKET RECEIVED===\n";
-	print $node->to_str() . "\n";
-	print "=====================\n\n";
+#	print "\n===PACKET RECEIVED===\n";
+#	print $node->to_str() . "\n";
+#	print "=====================\n\n";
 	
-	if($node->name() eq 'message' and $node->attr('from') ne $heap->{'jid'})
+	if($node->name() eq 'message')
 	{
+		my $from = $node->attr('to');
 		$node->attr('to', $node->attr('from'));
-		$node->attr('from', $heap->{'jid'});
-		$kernel->yield('output_event', $node);
+		$node->attr('from', $from);
+		
+		$kernel->delay_add('output_event', int(rand(10)), $node, $heap->{'jids'}->{$from});
 	}
+
+	$kernel->delay_add('test_message', int(rand(10)));
 		
 }
 
 sub test_message()
 {
-	my $kernel = $_[KERNEL];
+	my ($kernel, $heap) = @_[KERNEL, HEAP];
+	
+	my $total = $#{$heap->{'rand'}};
+	my $index1 = int(rand($total)+1);
+	my $index2 = int(rand($total)+1);
+	
+	my $jid = $heap->{'rand'}->[$index1];
+	my $sid = $heap->{'jids'}->{$heap->{'rand'}->[$index2]};
 	
 	my $node = XNode->new('message');
-	$node->attr('to', $_[HEAP]->{'jid'});
+	$node->attr('to', $jid);
 	$node->insert_tag('body')->data('This is a Test');
 	
-	$kernel->post('COMPONENT', 'return_to_sender', 'return_event', $node);
+	$kernel->yield('output_event', $node, $sid);
+
 }
 
 sub output_event()
 {
-	my ($kernel, $node) = @_[KERNEL, ARG0];
+	my ($kernel, $heap, $node, $sid) = @_[KERNEL, HEAP, ARG0, ARG1];
 	
-	print "\n===PACKET SENT===\n";
-	print $node->to_str() . "\n";
-	print "=================\n\n";
-	$kernel->post('COMPONENT', 'output_handler', $node);
+#	print "\n===PACKET SENT===\n";
+#	print $node->to_str() . "\n";
+#	print "=================\n\n";
+	
+	$kernel->post($sid, 'output_handler', $node);
 }
 
 sub return_event()
 {
 	my $node = $_[ARG0];
 	
-	print "###Our return event was fired!###\n";
-	print $node->to_str()."\n";
-	print "#################################\n";
+#	print "###Our return event was fired!###\n";
+#	print $node->to_str()."\n";
+#	print "#################################\n";
 }
 
 sub error_event()
 {
-	my $error = $_[ARG0];
+	my ($kernel, $sender, $heap, $error) = @_[KERNEL, SENDER, HEAP, ARG0];
 
 	if($error == +PCJ_SOCKFAIL)
 	{
@@ -121,6 +150,8 @@ sub error_event()
 	} elsif($error == +PCJ_SOCKDISC) {
 		
 		print "We got disconneted\n";
+		print "Reconnecting!\n";
+		$kernel->post($sender, 'reconnect');
 
 	} elsif ($error == +PCJ_AUTHFAIL) {
 

@@ -4,6 +4,7 @@ examples/LEGACYTester.pl
 examples/COMPTester.pl
 examples/SERVERTester.pl
 examples/XMPPTester.pl
+examples/XMPPSimpleTester.pl
 examples/J2Tester.pl
 Makefile.PL
 test.pl
@@ -23,3 +24,4 @@ lib/POE/Component/Jabber/Server/SocketServer.pm
 lib/POE/Component/Jabber/Server/Socket/CTLS.pm
 lib/POE/Component/Jabber/Server/Socket/STLS.pm
 META.yml                                 Module meta-data (added by MakeMaker)
+install/ExtUtils/AutoInstall.pm         AutoInstall incase we do not have one.

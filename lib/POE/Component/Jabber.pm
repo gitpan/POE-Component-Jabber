@@ -1,7 +1,6 @@
 package POE::Component::Jabber;
 
-#this is of course tenative
-our $VERSION = '1.0';
+our $VERSION = '1.1';
 		
 1;
 

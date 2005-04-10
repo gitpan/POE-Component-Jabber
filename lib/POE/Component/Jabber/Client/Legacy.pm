@@ -11,7 +11,7 @@ use POE::Filter::XML::Node;
 use POE::Filter::XML::NS qw/ :JABBER :IQ /;
 use Digest::SHA1 qw/ sha1_hex /;
 
-our $VERSION = '1.0';
+our $VERSION = '1.1';
 
 sub new()
 {
@@ -70,7 +70,7 @@ sub new()
 		
 		RemoteAddress => $args->{'ip'},
 		RemotePort => $args->{'port'},
-		ConnectTimeout => 5,
+		ConnectTimeout => 160,
 		
 		Filter => 'POE::Filter::XML',
 
@@ -85,6 +85,7 @@ sub new()
 			shutdown_socket => \&shutdown_socket,
 			set_auth => \&set_auth,
 			return_to_sender => \&return_to_sender,
+			reconnect_to_server => \&reconnect_to_server,
 		},
 		
 		Alias => $args->{'alias'},
@@ -93,24 +94,61 @@ sub new()
 	);
 }
 
+sub reconnect_to_server()
+{
+	my ($kernel, $heap, $session, $ip, $port) =
+		@_[KERNEL, HEAP, SENDER, ARG0, ARG1];
+	
+	$kernel->state('got_server_input', \&init_input_handler);
+	$heap->{'PENDING'} = {};
+	$heap->{'sid'} = 0;
+	$heap->{'id'}->reset();
+	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
+
+	if(defined($ip) and defined($port))
+	{
+		$kernel->yield('connect', $ip, $port);
+
+	} else {
+
+		$kernel->yield('reconnect');
+	}
+}
+
 sub return_to_sender()
 {
 	my ($self, $kernel, $heap, $session, $event, $node) = 
 		@_[SESSION, KERNEL, HEAP, SENDER, ARG0, ARG1];
 	
-	++$heap->{'id'};
-	$heap->{'PENDING'}->{$heap->{'id'}}->[0] = $session->ID();
-	$heap->{'PENDING'}->{$heap->{'id'}}->[1] = $event;
-	
 	my $attrs = $node->get_attrs();
+	my $pid;
 
 	if(exists($attrs->{'id'}))
 	{
-		warn $node->to_str();
-		warn "Overwriting pre-existing 'id'!";
-	}
+		if(exists($heap->{'PENDING'}->{$attrs->{'id'}}))
+		{
+			warn "COLLISION DETECTED!";
+			warn "OVERRIDING USER ID!";
+
+			$pid = $heap->{'id'}->add($heap->{'id'}->clone()->hexdigest())
+				->clone()->hexdigest();
+
+			$node->attr('id', $pid);
+		}
+
+		$pid = $attrs->{'id'};
 	
-	$node->attr('id', $heap->{'id'});
+	} else {
+
+		$pid = $heap->{'id'}->add($heap->{'id'}->clone()->hexdigest())
+			->clone()->hexdigest();
+
+		$node->attr('id', $pid);
+	}
+
+	$heap->{'PENDING'}->{$pid}->[0] = $session->ID();
+	$heap->{'PENDING'}->{$pid}->[1] = $event;
+	
 	$kernel->yield('output_handler', $node);
 }
 
@@ -128,7 +166,7 @@ sub set_auth()
 	
 	} else {
 
-		my $hashed = &sha1_hex($heap->{'sid'}.$heap->{'CONFIG'}->{'password'});
+		my $hashed = sha1_hex($heap->{'sid'}.$heap->{'CONFIG'}->{'password'});
 		$query->insert_tag('digest')->data($hashed);
 	}
 	
@@ -146,7 +184,9 @@ sub start()
 	my ($heap, $config) = @_[HEAP, ARG0];
 	
 	$heap->{'CONFIG'} = $config;
-	$heap->{'id'} = 0;
+	$heap->{'PENDING'} = {};
+	$heap->{'id'} = Digest::SHA1->new();
+	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
 	$heap->{'sid'} = 0;
 }
 
@@ -195,7 +235,8 @@ sub output_handler()
 		} else {
 			$xml = $data;
 		}
-		&debug_message( "Sent: $xml" );
+		
+		debug_message( "Sent: $xml" );
 	}
 
 	$heap->{'server'}->put($data);
@@ -209,7 +250,7 @@ sub input_handler()
 
 	if ($heap->{'CONFIG'}->{'debug'})
 	{
-		&debug_message( "Recd: ".$node->to_str() );
+		debug_message( "Recd: ".$node->to_str() );
 	}
 
 	if(exists($attrs->{'id'}))
@@ -233,7 +274,7 @@ sub init_input_handler()
 
 	if ($heap->{'CONFIG'}->{'debug'})
 	{
-		&debug_message( "Recd: ".$node->to_str() );
+		debug_message( "Recd: ".$node->to_str() );
 	}
 	
 	if($node->name() eq 'stream:stream')
@@ -276,8 +317,7 @@ sub server_error()
 
 sub debug_message()
 {
-	my $msg  = shift;
-	print STDERR "\n", scalar (localtime (time)), ": $msg\n";
+	print STDERR "\n", scalar (localtime (time)), ": ". shift ."\n";
 }
 
 1;
@@ -416,15 +456,25 @@ response to the request, the return event is fired with the response packet.
 
 One argument, time in seconds to call shutdown on the underlying Client::TCP
 
+=item 'reconnect_to_server'
+
+This event can take (1) the ip address of a new server and (2) the port. This
+event may also be called without any arguments and it will force the component
+to reconnect. 
+
 =back
 
 =head1 NOTES AND BUGS
 
-This is a connection broker. We are not going to wipe your ass for you :)
+This is a connection broker. This should not be considered a first class
+client. All upper level functions are the responsibility of the end developer.
+
+return_to_sender() no longer overwrites end developer supplied id attributes. 
+Instead, it now checks for a collision, warning and replacing the id, if there 
+is a collision.
 
 =head1 AUTHOR
 
-Copyright (c) 2003, 2004 Nicholas Perez. Distributed under the GPL.
+Copyright (c) 2003, 2004, 2005 Nicholas Perez. Distributed under the GPL.
 
 =cut
-

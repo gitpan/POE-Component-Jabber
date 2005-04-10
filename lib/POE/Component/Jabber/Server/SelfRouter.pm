@@ -125,7 +125,7 @@ sub set_bind()
 		}
 		
 	} else {
-
+		
 		$node = &get_stanza_error($node, 'bad-request', 'cancel');
 		$kernel->post($sid, 'output_handler', $node);
 	}

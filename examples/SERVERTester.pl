@@ -12,7 +12,7 @@ POE::Component::Jabber::Server->new
 	'hostname'			=> 'localhost',
 	'registrar'			=> 'foo.db',
 	'roster'			=> 'roster.db',
-	'idle_check'		=> '30',
+	'idle_check'		=> '15',
 	'idle_timeout'		=> '10',
 	'bandwidth_limit'	=> '10000',
 	'private'			=> './keys/privkey.pem',

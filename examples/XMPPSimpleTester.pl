@@ -6,10 +6,10 @@ const XNode POE::Filter::XML::Node
 use warnings;
 use strict;
 
-use POE qw/ Component::Jabber::Client::Legacy Component::Jabber::Error/;
+use POE qw/ Component::Jabber::Client::XMPP Component::Jabber::Error /;
 use POE::Filter::XML::Node;
 use POE::Filter::XML::NS qw/ :JABBER :IQ /;
-
+use List::Util qw/ shuffle /;
 
 POE::Session->create(
 	options => { debug => 1, trace => 1},
@@ -17,14 +17,15 @@ POE::Session->create(
 		_start =>
 			sub
 			{
-				my $kernel = $_[KERNEL];
+				my ($kernel, $heap) = @_[KERNEL, HEAP];
 				$kernel->alias_set('Tester');
-				POE::Component::Jabber::Client::Legacy->new(
+				
+				POE::Component::Jabber::Client::XMPP->new(
 					IP => 'localhost',
 					PORT => '5222',
 					HOSTNAME => 'localhost',
-					USERNAME => 'test03',
-					PASSWORD => 'test03',
+					USERNAME => 'test01',
+					PASSWORD => 'test01',
 					ALIAS => 'COMPONENT',
 					DEBUG => '1',
 					STATE_PARENT => 'Tester',
@@ -34,14 +35,16 @@ POE::Session->create(
 						ErrorEvent => 'error_event',
 					}
 				);
-						
 			},
+
 		_stop =>
 			sub
 			{
 				my $kernel = $_[KERNEL];
 				$kernel->alias_remove();
 			},
+
+		delay_start => \&delay_start,
 		input_event => \&input_event,
 		error_event => \&error_event,
 		init_finished => \&init_finished,
@@ -54,11 +57,16 @@ POE::Session->create(
 
 sub init_finished()
 {
-	my ($kernel, $heap, $jid) = @_[KERNEL, HEAP, ARG0];
+	my ($kernel, $sender, $heap, $jid) = @_[KERNEL, SENDER, HEAP, ARG0];
 	
 	print "INIT FINISHED!\n";
+	print "JID: $jid \n";
+	print "SID: ".$sender->ID()."\n\n";
+	
 	$heap->{'jid'} = $jid;
-	$kernel->yield('test_message');
+	$heap->{'sid'} = $sender->ID();
+	$kernel->delay_add('test_message', int(rand(10)));
+	
 }
 
 sub input_event()
@@ -69,34 +77,31 @@ sub input_event()
 	print $node->to_str() . "\n";
 	print "=====================\n\n";
 	
-	if($node->name() eq 'message' and $node->attr('from') ne $heap->{'jid'})
-	{
-		$node->attr('to', $node->attr('from'));
-		$node->attr('from', $heap->{'jid'});
-		$kernel->yield('output_event', $node);
-	}
+	$kernel->delay_add('test_message', int(rand(10)));
 		
 }
 
 sub test_message()
 {
-	my $kernel = $_[KERNEL];
+	my ($kernel, $heap) = @_[KERNEL, HEAP];
 	
 	my $node = XNode->new('message');
-	$node->attr('to', $_[HEAP]->{'jid'});
+	$node->attr('to', $heap->{'jid'});
 	$node->insert_tag('body')->data('This is a Test');
 	
-	$kernel->post('COMPONENT', 'return_to_sender', 'return_event', $node);
+	$kernel->yield('output_event', $node, $heap->{'sid'});
+
 }
 
 sub output_event()
 {
-	my ($kernel, $node) = @_[KERNEL, ARG0];
+	my ($kernel, $heap, $node, $sid) = @_[KERNEL, HEAP, ARG0, ARG1];
 	
 	print "\n===PACKET SENT===\n";
 	print $node->to_str() . "\n";
 	print "=================\n\n";
-	$kernel->post('COMPONENT', 'output_handler', $node);
+	
+	$kernel->post($sid, 'output_handler', $node);
 }
 
 sub return_event()
@@ -110,7 +115,7 @@ sub return_event()
 
 sub error_event()
 {
-	my $error = $_[ARG0];
+	my ($kernel, $sender, $heap, $error) = @_[KERNEL, SENDER, HEAP, ARG0];
 
 	if($error == +PCJ_SOCKFAIL)
 	{
@@ -118,21 +123,23 @@ sub error_event()
 		print "Socket error: $call, $code, $err\n";
 	
 	} elsif($error == +PCJ_SOCKDISC) {
+		
+		print "We got disconneted\n";
+		print "Reconnecting!\n";
+		$kernel->post($sender, 'reconnect_to_server');
 
-		print "We got disconneted\n"; 
-	
 	} elsif ($error == +PCJ_AUTHFAIL) {
 
 		print "Failed to authenticate\n";
-	
+
 	} elsif ($error == +PCJ_BINDFAIL) {
 
 		print "Failed to bind a resource\n";
-
-	} elsif ($error == +PCJ_SESSFAIL) {
 	
+	} elsif ($error == +PCJ_SESSFAIL) {
+
 		print "Failed to establish a session\n";
 	}
-}   
-
+}
+	
 POE::Kernel->run();

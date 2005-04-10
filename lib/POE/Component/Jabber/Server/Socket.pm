@@ -316,21 +316,21 @@ sub init_input_handler()
 		} else {
 			
 			my $password = $heap->{'ROUTE'}->get_auth($hash->{'username'});
-
-			my $A1 = 
-			join
-			(':', 
-				&md5
-				(
-					join
-					(':', 
-						$hash->{'username'}, 
-						$heap->{'CONFIG'}->{'hostname'}, 
-						$password
-					)
-				),
-				$heap->{'nonce'}, $hash->{'cnonce'}
-			);
+			
+			my $A1 =
+				join
+				(':', 
+					&md5
+					(
+						join
+						(':', 
+							$hash->{'username'}, 
+							$heap->{'CONFIG'}->{'hostname'}, 
+							$password
+						)
+					),
+					$heap->{'nonce'}, $hash->{'cnonce'}
+				);
 			
 			my $A2 = "AUTHENTICATE:" . $hash->{'digest-uri'};
 

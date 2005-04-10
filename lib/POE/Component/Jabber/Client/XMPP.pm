@@ -15,7 +15,7 @@ use MIME::Base64;
 use Authen::SASL;
 use Symbol qw(gensym);
 
-our $VERSION = '1.0';
+our $VERSION = '1.1';
 
 sub new()
 {
@@ -46,7 +46,7 @@ sub new()
 	$args->{'stream'} = +XMLNS_STREAM unless defined $args->{'stream'};
 	$args->{'debug'} = 0 unless defined $args->{'debug'};
 	$args->{'version'} = '1.0' unless defined $args->{'version'};
-	$args->{'resource'} = &md5_hex(time().rand().$$.rand().$^T.rand()) 
+	$args->{'resource'} = md5_hex(time().rand().$$.rand().$^T.rand()) 
 		unless defined $args->{'resource'};
 	
 	die "$me requires username to be defined" if not defined
@@ -73,7 +73,7 @@ sub new()
 		
 		RemoteAddress => $args->{'ip'},
 		RemotePort => $args->{'port'},
-		ConnectTimeout => 5,
+		ConnectTimeout => 600,
 		
 		Filter => 'POE::Filter::XML',
 
@@ -83,7 +83,8 @@ sub new()
 		ServerInput => \&init_input_handler,
 		ServerError => \&server_error,
 
-		InlineStates => {
+		InlineStates => 
+		{
 			initiate_stream => \&initiate_stream,
 			output_handler => \&output_handler,
 			challenge_response => \&challenge_response,
@@ -93,7 +94,7 @@ sub new()
 			build_tls_wheel => \&build_tls_wheel,
 			binding => \&binding,
 			session_establish => \&session_establish,
-			
+			reconnect_to_server => \&reconnect_to_server,
 		},
 		
 		Alias => $args->{'alias'},
@@ -102,34 +103,77 @@ sub new()
 	);
 }
 
+sub reconnect_to_server()
+{
+	my ($kernel, $heap, $ip, $port) = @_[KERNEL, HEAP, ARG0, ARG1];
+	
+	if(defined($heap->{'socket'}))
+	{
+		$heap->{'socket'}->close();
+	}
+
+	$kernel->state('got_server_input', \&init_input_handler);
+	$heap->{'PENDING'} = {};
+	$heap->{'sid'} = 0;
+	$heap->{'id'}->reset();
+	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
+
+	if(defined($ip) and defined($port))
+	{
+		$kernel->yield('connect', $ip, $port);
+	
+	} else {
+
+		$kernel->yield('reconnect');
+	}
+}
+	
 sub return_to_sender()
 {
 	my ($kernel, $heap, $session, $event, $node) = 
 		@_[KERNEL, HEAP, SENDER, ARG0, ARG1];
 	
-	++$heap->{'id'};
-	$heap->{'PENDING'}->{$heap->{'id'}}->[0] = $session->ID();
-	$heap->{'PENDING'}->{$heap->{'id'}}->[1] = $event;
-	
 	my $attrs = $node->get_attrs();
-
+	my $pid;
+	
 	if(exists($attrs->{'id'}))
 	{
-		warn $node->to_str();
-		warn "Overwriting pre-existing 'id'!";
+		if(exists($heap->{'PENDING'}->{$attrs->{'id'}}))
+		{
+			warn "COLLISION DETECTED!";
+			warn "OVERRIDING USER ID!";
+			
+			$pid = $heap->{'id'}->add($heap->{'id'}->clone()->hexdigest())
+				->clone()->hexdigest();
+
+			$node->attr('id', $pid);
+		}
+
+		$pid = $attrs->{'id'};
+		
+	} else {
+		
+		$pid = $heap->{'id'}->add($heap->{'id'}->clone()->hexdigest())
+			->clone()->hexdigest();
+		
+		$node->attr('id', $pid);
 	}
+		
+	$heap->{'PENDING'}->{$pid}->[0] = $session->ID();
+	$heap->{'PENDING'}->{$pid}->[1] = $event;
 	
-	$node->attr('id', $heap->{'id'});
 	$kernel->yield('output_handler', $node);
 }
 
 sub set_auth()
 {
 	my ($kernel, $heap, $mech) = @_[KERNEL, HEAP, ARG0];
-
-	my $sasl = Authen::SASL->new(
-		mechanism => 'DIGEST_MD5',
-		callback  => {
+	
+	my $sasl = Authen::SASL->new
+	(
+		mechanism => $mech,
+		callback => 
+		{
 			user => $heap->{'CONFIG'}->{'username'},
 			pass => $heap->{'CONFIG'}->{'password'},
 		}
@@ -137,8 +181,17 @@ sub set_auth()
 
 	$heap->{'challenge'} = $sasl;
 
-	my $node = XNode->new('auth',
-	['xmlns', +NS_XMPP_SASL, 'mechanism', $mech]);
+	my $node = XNode->new('auth', ['xmlns', +NS_XMPP_SASL, 'mechanism', $mech]);
+
+	if ($mech eq "PLAIN") 
+	{
+		my $auth_str = "";
+		$auth_str .= "\0";
+		$auth_str .= $heap->{'CONFIG'}->{'username'};
+		$auth_str .= "\0";
+		$auth_str .= $heap->{'CONFIG'}->{'password'};	   
+		$node->data(encode_base64($auth_str));	
+	}
 
 	$kernel->yield('output_handler', $node);
 
@@ -150,8 +203,10 @@ sub start()
 	my ($heap, $config) = @_[HEAP, ARG0];
 	
 	$heap->{'CONFIG'} = $config;
-	$heap->{'id'} = 0;
+	$heap->{'id'} = Digest::MD5->new();
+	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
 	$heap->{'sid'} = 0;
+	$heap->{'PENDING'} = {};
 }
 
 sub init_connection()
@@ -184,7 +239,9 @@ sub initiate_stream()
 }
 
 sub disconnected()
-{
+{	
+	# Must explicitly close SSL sockets, or things leak.
+	$_[HEAP]->{'socket'}->close();
 	$_[KERNEL]->post($_[HEAP]->{'CONFIG'}->{'state_parent'},
 		$_[HEAP]->{'CONFIG'}->{'states'}->{'errorevent'},
 		+PCJ_SOCKDISC);
@@ -205,6 +262,7 @@ sub output_handler()
 	if ($heap->{'CONFIG'}->{'debug'})
 	{
 		my $xml;
+		
 		if (ref $data eq 'XNode')
 		{
 			$xml = $data->to_str();
@@ -213,7 +271,8 @@ sub output_handler()
 		
 			$xml = $data;
 		}
-		&debug_message( "Sent: $xml" );
+		
+		debug_message( "Sent: $xml" );
 	}
 
 	$heap->{'server'}->put($data);
@@ -225,10 +284,9 @@ sub challenge_response()
 	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 
 	if ($heap->{'CONFIG'}->{'debug'}) {
-		&debug_message(
-			"Server sent a challenge.  Decoded Challenge:\n" .
-			decode_base64( $node->data() )
-		);
+		
+		debug_message("Server sent a challenge.  Decoded Challenge:\n" .
+			decode_base64($node->data()));
 	}
 	
 	my $sasl = $heap->{'challenge'};
@@ -236,9 +294,11 @@ sub challenge_response()
 	$conn->client_start();
 
 	my $step = $conn->client_step(decode_base64($node->data()));
+	
+	$step = '' if not defined($step);
 
 	if ($heap->{'CONFIG'}->{'debug'}) {
-		&debug_message("Decoded Response:\n$step");
+		debug_message("Decoded Response:\n$step");
 	}
 
 	$step =~ s/\s+//go;
@@ -258,7 +318,7 @@ sub input_handler()
 	my $attrs = $node->get_attrs();		
 	if ($heap->{'CONFIG'}->{'debug'})
 	{
-		&debug_message("Recd: ".$node->to_str());
+		debug_message("Recd: ".$node->to_str());
 	}
 
 	if(exists($attrs->{'id'}))
@@ -284,7 +344,7 @@ sub init_input_handler()
 
 	if ($heap->{'CONFIG'}->{'debug'})
 	{
-		&debug_message("Recd: ".$node->to_str());
+		debug_message("Recd: ".$node->to_str());
 	}
 
 	if(exists($attrs->{'id'}))
@@ -335,7 +395,7 @@ sub init_input_handler()
 			my $mechs = $clist->{'mechanisms'}->get_sort_children();
 			foreach my $mech (@$mechs)
 			{
-				if($mech->data() eq 'DIGEST-MD5')
+				if($mech->data() eq 'DIGEST-MD5' or $mech->data() eq 'PLAIN')
 				{
 					$kernel->yield('set_auth', $mech->data());
 					return;
@@ -412,7 +472,7 @@ sub binding()
 			my $iq = XNode->new('iq', ['type', +IQ_SET]);
 			$iq->insert_tag('bind', ['xmlns', +NS_XMPP_BIND])
 				->insert_tag('resource')
-				->data(&md5_hex(time().rand().$$.rand().$^T.rand()));
+				->data(md5_hex(time().rand().$$.rand().$^T.rand()));
 			$kernel->yield('return_to_sender', 'binding', $iq);
 		
 		} elsif($error->attr('type') eq 'cancel') {
@@ -424,7 +484,7 @@ sub binding()
 				my $iq = XNode->new('iq', ['type', +IQ_SET]);
 				$iq->insert_tag('bind', ['xmlns', +NS_XMPP_BIND])
 					->insert_tag('resource')
-					->data(&md5_hex(time().rand().$$.rand().$^T.rand()));
+					->data(md5_hex(time().rand().$$.rand().$^T.rand()));
 				$kernel->yield('return_to_sender', 'binding', $iq);
 			
 			} else {
@@ -481,10 +541,12 @@ sub build_tls_wheel()
 		'POE::Component::Jabber::Client::XMPP::TLS',
 		$heap->{'socket'},
 	) or die $!;
+
+	$heap->{'socket'} = $socket;
 	
 	$heap->{'server'} = POE::Wheel::ReadWrite->new
 	(
-		'Handle'		=> $socket,
+		'Handle'		=> $heap->{'socket'},
 		'Filter'		=> POE::Filter::XML->new(),
 		'InputEvent'	=> 'got_server_input',
 		'ErrorEvent'	=> 'got_server_error',
@@ -507,8 +569,7 @@ sub server_error()
 
 sub debug_message()
 {
-	my $msg  = shift;
-	print STDERR "\n", scalar (localtime (time)), ": $msg\n";
+	print STDERR "\n", scalar (localtime (time)), ": ". shift ."\n";
 }
 
 1;
@@ -644,15 +705,28 @@ response to the request, the return event is fired with the response packet.
 
 One argument, time in seconds to call shutdown on the underlying Client::TCP
 
+=item 'reconnect_to_server'
+
+This event can take (1) the ip address of a new server and (2) the port. This
+event may also be called without any arguments and it will force the component
+to reconnect. 
+
 =back
 
 =head1 NOTES AND BUGS
 
-This is a connection broker. We are not going to wipe your ass for you :)
+This is a connection broker. This should not be considered a first class
+client. This broker basically implements XMPP Core with a small portion of 
+XMPP IM (session binding). All upper level XMPP IM functions are the
+responsibility of the end developer.
+
+return_to_sender() no longer overwrites end developer supplied id attributes. 
+Instead, it now checks for a collision, warning and replacing the id, if there 
+is a collision.
 
 =head1 AUTHOR
 
-Copyright (c) 2003, 2004 Nicholas Perez. Distributed under the GPL.
+Copyright (c) 2003, 2004, 2005 Nicholas Perez. Distributed under the GPL.
 
 =cut
 

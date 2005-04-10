@@ -15,7 +15,7 @@ use MIME::Base64;
 use Authen::SASL;
 use Symbol qw(gensym);
 
-our $VERSION = '1.0';
+our $VERSION = '1.1';
 
 sub new()
 {
@@ -73,7 +73,7 @@ sub new()
 		
 		RemoteAddress => $args->{'ip'},
 		RemotePort => $args->{'port'},
-		ConnectTimeout => 5,
+		ConnectTimeout => 160,
 		
 		Filter => 'POE::Filter::XML',
 
@@ -93,7 +93,7 @@ sub new()
 			build_tls_wheel => \&build_tls_wheel,
 			binding => \&binding,
 			session_establish => \&session_establish,
-			
+			reconnect_to_server => \&reconnect_to_server,
 		},
 		
 		Alias => $args->{'alias'},
@@ -102,34 +102,77 @@ sub new()
 	);
 }
 
+sub reconnect_to_server()
+{
+	my ($kernel, $heap, $ip, $port) = @_[KERNEL, HEAP, ARG0, ARG1];
+	
+	if(defined($heap->{'socket'}))
+	{
+		$heap->{'socket'}->close();
+	}
+
+	$kernel->state('got_server_input', \&init_input_handler);
+	$heap->{'PENDING'} = {};
+	$heap->{'sid'} = 0;
+	$heap->{'id'}->reset();
+	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
+
+	if(defined($ip) and defined($port))
+	{
+		$kernel->yield('connect', $ip, $port);
+	
+	} else {
+
+		$kernel->yield('reconnect');
+	}
+}
+
 sub return_to_sender()
 {
-	my ($self, $kernel, $heap, $session, $event, $node) = 
-		@_[SESSION, KERNEL, HEAP, SENDER, ARG0, ARG1];
-	
-	++$heap->{'id'};
-	$heap->{'PENDING'}->{$heap->{'id'}}->[0] = $session->ID();
-	$heap->{'PENDING'}->{$heap->{'id'}}->[1] = $event;
+	my ($kernel, $heap, $session, $event, $node) =
+		@_[KERNEL, HEAP, SENDER, ARG0, ARG1];
 	
 	my $attrs = $node->get_attrs();
+	my $pid;
 
 	if(exists($attrs->{'id'}))
 	{
-		warn $node->to_str();
-		warn "Overwriting pre-existing 'id'!";
-	}
+		if(exists($heap->{'PENDING'}->{$attrs->{'id'}}))
+		{
+			warn "COLLISION DETECTED!";
+			warn "OVERRIDING USER ID!";
+			
+			$pid = $heap->{'id'}->add($heap->{'id'}->clone()->hexdigest())
+				->clone()->hexdigest();
+
+			$node->attr('id', $pid);
+		}
+
+		$pid = $attrs->{'id'};
 	
-	$node->attr('id', $heap->{'id'});
-	$kernel->call($self, 'output_handler', $node);
+	} else {
+
+		$pid = $heap->{'id'}->add($heap->{'id'}->clone()->hexdigest())
+			->clone()->hexdigest();
+
+		$node->attr('id', $pid);
+	}
+
+	$heap->{'PENDING'}->{$pid}->[0] = $session->ID();
+	$heap->{'PENDING'}->{$pid}->[1] = $event;
+
+	$kernel->yield('output_handler', $node);
 }
 
 sub set_auth()
 {
-	my ($self, $kernel, $heap, $mech) = @_[SESSION, KERNEL, HEAP, ARG0];
+	my ($kernel, $heap, $mech) = @_[KERNEL, HEAP, ARG0];
 
-	my $sasl = Authen::SASL->new(
+	my $sasl = Authen::SASL->new
+	(
 		mechanism => 'DIGEST_MD5',
-		callback  => {
+		callback  => 
+		{
 			user => $heap->{'CONFIG'}->{'username'},
 			pass => $heap->{'CONFIG'}->{'password'},
 		}
@@ -140,35 +183,35 @@ sub set_auth()
 	my $node = XNode->new('auth',
 	['xmlns', +NS_XMPP_SASL, 'mechanism', $mech]);
 
-	$kernel->call($self, 'output_handler', $node);
+	$kernel->yield('output_handler', $node);
 
 	return;
 }
 
 sub start()
 {
-	my ($session, $kernel, $heap, $config) = @_[SESSION, KERNEL, HEAP, ARG0];
+	my ($kernel, $heap, $config) = @_[KERNEL, HEAP, ARG0];
 	
 	$heap->{'CONFIG'} = $config;
-	$heap->{'id'} = 0;
+	$heap->{'id'} = Digest::MD5->new();
+	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
 	$heap->{'sid'} = 0;
-	$heap->{'roster'} = {};
 }
 
 sub init_connection()
 {
-	my ($session, $kernel, $heap, $socket) = @_[SESSION, KERNEL, HEAP, ARG0];
+	my ($kernel, $heap, $socket) = @_[KERNEL, HEAP, ARG0];
 
 	$heap->{'socket'} = $socket;
 
-	$kernel->call($session, 'initiate_stream');
+	$kernel->yield('initiate_stream');
 
 	return;
 }
 
 sub initiate_stream()
 {
-	my ($session, $kernel, $heap) = @_[SESSION, KERNEL, HEAP];
+	my ($kernel, $heap) = @_[KERNEL, HEAP];
 
 	my $foundation  = $heap->{'CONFIG'};
 	my $host		= $foundation->{'hostname'};
@@ -184,7 +227,7 @@ sub initiate_stream()
 	'version', $version]
 	)->stream_start(1);
 
-	$kernel->call($session, 'output_handler', $element);
+	$kernel->yield('output_handler', $element);
 
 	return;
 }
@@ -228,7 +271,7 @@ sub output_handler()
 
 sub challenge_response()
 {
-	my ($self, $kernel, $heap, $node) = @_[SESSION, KERNEL, HEAP, ARG0];
+	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 
 	if ($heap->{'CONFIG'}->{'debug'}) {
 		&debug_message(
@@ -254,12 +297,12 @@ sub challenge_response()
 	my $response = XNode->new('response', ['xmlns', +NS_XMPP_SASL]);
 	$response->data($step);
 
-	$kernel->call($self, 'output_handler', $response);
+	$kernel->yield('output_handler', $response);
 }
 
 sub input_handler()
 {
-	my ($self, $kernel, $heap, $node) = @_[SESSION, KERNEL, HEAP, ARG0];
+	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 	
 	my $attrs = $node->get_attrs();		
 	if ($heap->{'CONFIG'}->{'debug'})
@@ -285,7 +328,7 @@ sub input_handler()
 
 sub init_input_handler()
 {
-	my ($self, $kernel, $heap, $node) = @_[SESSION, KERNEL, HEAP, ARG0];
+	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 	my $attrs = $node->get_attrs();
 
 	if ($heap->{'CONFIG'}->{'debug'})
@@ -311,7 +354,7 @@ sub init_input_handler()
 
 	if($node->name() eq 'challenge')
 	{
-		$kernel->call($self, 'challenge_response', $node);
+		$kernel->yield('challenge_response', $node);
 		return;
 	}
 
@@ -332,7 +375,7 @@ sub init_input_handler()
 		if(exists($clist->{'starttls'}))
 		{
 			my $starttls = XNode->new('starttls', ['xmlns', +NS_XMPP_TLS]);
-			$kernel->call($self, 'output_handler', $starttls);
+			$kernel->yield('output_handler', $starttls);
 			return;
 		}
 
@@ -343,7 +386,7 @@ sub init_input_handler()
 			{
 				if($mech->data() eq 'DIGEST-MD5')
 				{
-					$kernel->call($self, 'set_auth', $mech->data());
+					$kernel->yield('set_auth', $mech->data());
 					return;
 				}
 			}
@@ -374,8 +417,8 @@ sub init_input_handler()
 
 	if($node->name() eq 'proceed')
 	{
-		$kernel->post($self, 'build_tls_wheel');
-		$kernel->post($self, 'initiate_stream');
+		$kernel->yield('build_tls_wheel');
+		$kernel->yield('initiate_stream');
 		return;
 	}
 
@@ -390,13 +433,13 @@ sub init_input_handler()
 
 sub binding()
 {
-	my ($session, $kernel, $heap, $node) = @_[SESSION, KERNEL, HEAP, ARG0];
+	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 
 	my $attr = $node->attr('error');
 
 	if(!$attr)
 	{
-		$kernel->call($heap->{'CONFIG'}->{'state_parent'},
+		$kernel->post($heap->{'CONFIG'}->{'state_parent'},
 			$heap->{'CONFIG'}->{'states'}->{'initfinish'},
 			$heap->{'CONFIG'}->{'bind_domain'});
 		$kernel->state('got_server_input', \&input_handler);
@@ -414,7 +457,7 @@ sub binding()
 		
 sub build_tls_wheel()
 {
-	my ($session, $kernel, $heap) = @_[SESSION, KERNEL, HEAP];
+	my ($kernel, $heap) = @_[KERNEL, HEAP];
 	
 	delete $heap->{'server'};
 	my $socket = &gensym();
@@ -596,15 +639,26 @@ response to the request, the return event is fired with the response packet.
 
 One argument, time in seconds to call shutdown on the underlying Client::TCP
 
+=item 'reconnect_to_server'
+
+This event can take (1) the ip address of a new server and (2) the port. This
+event may also be called without any arguments and it will force the component
+to reconnect. 
+
 =back
 
 =head1 NOTES AND BUGS
 
-This is a connection broker. We are not going to wipe your ass for you :)
+This is a connection broker. This should not be considered a first class
+client. All upper level functions are the responsibility of the end developer.
+
+return_to_sender() no longer overwrites end developer supplied id attributes. 
+Instead, it now checks for a collision, warning and replacing the id, if there 
+is a collision.
 
 =head1 AUTHOR
 
-Copyright (c) 2003, 2004 Nicholas Perez. Distributed under the GPL.
+Copyright (c) 2003, 2004, 2005 Nicholas Perez. Distributed under the GPL.
 
 =cut
 
