@@ -1,11 +1,11 @@
 package POE::Component::Jabber::Client::J2;
-use POE::Preprocessor;
+use Filter::Template;
 const XNode POE::Filter::XML::Node
 use warnings;
 use strict;
 
 use POE qw/ Wheel::ReadWrite Component::Client::TCP /;
-use POE::Component::Jabber::Client::XMPP::TLS;
+use POE::Component::SSLify qw/ Client_SSLify /;
 use POE::Component::Jabber::Error;
 use POE::Filter::XML;
 use POE::Filter::XML::Node;
@@ -13,9 +13,8 @@ use POE::Filter::XML::NS qw/ :JABBER :IQ /;
 use Digest::MD5 qw/ md5_hex /;
 use MIME::Base64;
 use Authen::SASL;
-use Symbol qw(gensym);
 
-our $VERSION = '1.1';
+our $VERSION = '1.21';
 
 sub new()
 {
@@ -82,6 +81,7 @@ sub new()
 
 		ServerInput => \&init_input_handler,
 		ServerError => \&server_error,
+		ConnectError => \&connect_error,
 
 		InlineStates => {
 			initiate_stream => \&initiate_stream,
@@ -100,6 +100,16 @@ sub new()
 		Started => \&start,
 		Args => [ $args ],
 	);
+}
+
+sub connect_error()
+{
+	my ($kernel, $heap, $call, $code, $err) = @_[KERNEL, HEAP, ARG0..ARG2];
+	
+	warn "Connect Error: $call: $code -> $err\n";
+	$kernel->post($heap->{'CONFIG'}->{'state_parent'},
+		$heap->{'CONFIG'}->{'states'}->{'errorevent'},
+		+PCJ_CONNFAIL, $call, $code, $err);
 }
 
 sub reconnect_to_server()
@@ -196,6 +206,7 @@ sub start()
 	$heap->{'id'} = Digest::MD5->new();
 	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
 	$heap->{'sid'} = 0;
+	$heap->{'SSLTRIES'} = 0;
 }
 
 sub init_connection()
@@ -460,18 +471,30 @@ sub build_tls_wheel()
 	my ($kernel, $heap) = @_[KERNEL, HEAP];
 	
 	delete $heap->{'server'};
-	my $socket = &gensym();
+	eval { $heap->{'socket'} = Client_SSLify( $heap->{'socket'} ) };
 
-	tie
-	(
-		*$socket, 
-		'POE::Component::Jabber::Client::XMPP::TLS',
-		$heap->{'socket'},
-	) or die $!;
+	if($@)
+	{
+		if($heap->{'SSLTRIES'} > 3)
+		{
+			warn 'Unable to negotiate SSL: '. $@;
+			$heap->{'SSLTRIES'} = 0;
+			$kernel->post($heap->{'CONFIG'}->{'state_parent'},
+				$heap->{'CONFIG'}->{'states'}->{'errorevent'},
+				+PCJ_SSLFAIL, $@);
+		
+		} else {
+
+			$heap->{'SSLTRIES'}++;
+			$kernel->yield('build_tls_wheel');
+		}
+		
+		return;
+	}
 	
 	$heap->{'server'} = POE::Wheel::ReadWrite->new
 	(
-		'Handle'		=> $socket,
+		'Handle'		=> $heap->{'socket'},
 		'Filter'		=> POE::Filter::XML->new(),
 		'InputEvent'	=> 'got_server_input',
 		'ErrorEvent'	=> 'got_server_error',
@@ -495,8 +518,7 @@ sub server_error()
 
 sub debug_message()
 {
-	my $msg  = shift;
-	print STDERR "\n", scalar (localtime (time)), ": $msg\n";
+	warn "\n", scalar (localtime (time)), ': '. shift(@_). "\n";
 }
 
 1;

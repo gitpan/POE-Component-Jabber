@@ -1,11 +1,11 @@
 package POE::Component::Jabber::Client::XMPP;
-use POE::Preprocessor;
+use Filter::Template;
 const XNode POE::Filter::XML::Node
 use warnings;
 use strict;
 
 use POE qw/ Wheel::ReadWrite Component::Client::TCP /;
-use POE::Component::Jabber::Client::XMPP::TLS;
+use POE::Component::SSLify qw/ Client_SSLify /;
 use POE::Component::Jabber::Error;
 use POE::Filter::XML;
 use POE::Filter::XML::Node;
@@ -13,9 +13,8 @@ use POE::Filter::XML::NS qw/ :JABBER :IQ /;
 use Digest::MD5 qw/ md5_hex /;
 use MIME::Base64;
 use Authen::SASL;
-use Symbol qw(gensym);
 
-our $VERSION = '1.1';
+our $VERSION = '1.21';
 
 sub new()
 {
@@ -82,6 +81,7 @@ sub new()
 
 		ServerInput => \&init_input_handler,
 		ServerError => \&server_error,
+		ConnectError => \&connect_error,
 
 		InlineStates => 
 		{
@@ -101,6 +101,17 @@ sub new()
 		Started => \&start,
 		Args => [ $args ],
 	);
+	return;
+}
+
+sub connect_error()
+{
+	my ($kernel, $heap, $call, $code, $err) = @_[KERNEL, HEAP, ARG0..ARG2];
+
+	warn "Connect Error: $call: $code -> $err\n";
+	$kernel->post($heap->{'CONFIG'}->{'state_parent'},
+		$heap->{'CONFIG'}->{'states'}->{'errorevent'},
+		+PCJ_CONNFAIL, $call, $code, $err);
 }
 
 sub reconnect_to_server()
@@ -126,6 +137,8 @@ sub reconnect_to_server()
 
 		$kernel->yield('reconnect');
 	}
+
+	return;
 }
 	
 sub return_to_sender()
@@ -163,6 +176,8 @@ sub return_to_sender()
 	$heap->{'PENDING'}->{$pid}->[1] = $event;
 	
 	$kernel->yield('output_handler', $node);
+	
+	return;
 }
 
 sub set_auth()
@@ -207,6 +222,9 @@ sub start()
 	$heap->{'id'}->add(time().rand().$$.rand().$^T.rand());
 	$heap->{'sid'} = 0;
 	$heap->{'PENDING'} = {};
+	$heap->{'SSLTRIES'} = 0;
+
+	return;
 }
 
 sub init_connection()
@@ -245,6 +263,7 @@ sub disconnected()
 	$_[KERNEL]->post($_[HEAP]->{'CONFIG'}->{'state_parent'},
 		$_[HEAP]->{'CONFIG'}->{'states'}->{'errorevent'},
 		+PCJ_SOCKDISC);
+	return;
 }
 
 sub shutdown_socket()
@@ -309,6 +328,7 @@ sub challenge_response()
 	$response->data($step);
 
 	$kernel->yield('output_handler', $response);
+	return;
 }
 
 sub input_handler()
@@ -316,6 +336,7 @@ sub input_handler()
 	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 	
 	my $attrs = $node->get_attrs();		
+	
 	if ($heap->{'CONFIG'}->{'debug'})
 	{
 		debug_message("Recd: ".$node->to_str());
@@ -346,52 +367,43 @@ sub init_input_handler()
 	{
 		debug_message("Recd: ".$node->to_str());
 	}
-
+	
 	if(exists($attrs->{'id'}))
 	{
+	
 		if(defined($heap->{'PENDING'}->{$attrs->{'id'}}))
 		{
 			my $array = delete $heap->{'PENDING'}->{$attrs->{'id'}};
 			$kernel->post($array->[0], $array->[1], $node);
-			return;
 		}
-	}
 	
-	if($node->name() eq 'stream:stream')
-	{
+	} elsif($node->name() eq 'stream:stream') {
+	
 		$heap->{'sid'} = $node->attr('id');
-		return;
-	}
-
-	if($node->name() eq 'challenge')
-	{
+	
+	} elsif($node->name() eq 'challenge') {
+	
 		$kernel->yield('challenge_response', $node);
-		return;
-	}
-
-	if($node->name() eq 'failure' and $node->attr('xmlns') eq +NS_XMPP_SASL)
-	{
+	
+	} elsif($node->name() eq 'failure' and $node->attr('xmlns') eq +NS_XMPP_SASL) {
+		
 		warn "SASL Negotiation Failed";
 		$kernel->yield('shutdown');
 		$kernel->post($heap->{'CONFIG'}->{'state_parent'},
 			$heap->{'CONFIG'}->{'states'}->{'errorevent'},
 			+PCJ_AUTHFAIL);
-		return;
-	}
-
-	if($node->name() eq 'stream:features')
-	{
+	
+	} elsif($node->name() eq 'stream:features') {
+	
 		my $clist = $node->get_children_hash();
 
 		if(exists($clist->{'starttls'}))
 		{
 			my $starttls = XNode->new('starttls', ['xmlns', +NS_XMPP_TLS]);
 			$kernel->yield('output_handler', $starttls);
-			return;
-		}
-
-		if(exists($clist->{'mechanisms'})) 
-		{
+		
+		} elsif(exists($clist->{'mechanisms'})) {
+		
 			my $mechs = $clist->{'mechanisms'}->get_sort_children();
 			foreach my $mech (@$mechs)
 			{
@@ -403,10 +415,9 @@ sub init_input_handler()
 			}
 			
 			die "UNKNOWN MECHANISM: ".$node->to_str();
-		}
-
-		if(exists($clist->{'bind'}))
-		{
+		
+		} elsif(exists($clist->{'bind'})) {
+		
 			my $iq = XNode->new('iq', ['type', +IQ_SET]);
 			$iq->insert_tag('bind', ['xmlns', +NS_XMPP_BIND])
 				->insert_tag('resource')
@@ -414,26 +425,19 @@ sub init_input_handler()
 			
 			$heap->{'STARTSESSION'} = 1 if exists($clist->{'session'});
 			$kernel->yield('return_to_sender', 'binding', $iq);
-			return;
 		}
 
-		return;
-	}
-
-	if($node->name() eq 'proceed')
-	{
+	} elsif($node->name() eq 'proceed') {
+	
 		$kernel->yield('build_tls_wheel');
 		$kernel->yield('initiate_stream');
-		return;
-	}
-
-	if($node->name() eq 'success')
-	{
+	
+	} elsif($node->name() eq 'success') {
+		
 		$heap->{'server'}->[2]->reset();
 		$kernel->yield('initiate_stream');
-		return;
 	}
-		
+	return;	
 }
 
 sub binding()
@@ -463,6 +467,7 @@ sub binding()
 				$heap->{'JID'});
 			$kernel->state('got_server_input', \&input_handler);
 		}
+	
 	} elsif($attr eq +IQ_ERROR) {
 
 		my $error = $node->get_tag('error');
@@ -499,6 +504,7 @@ sub binding()
 			
 		}
 	}
+	return;
 }
 		
 sub session_establish()
@@ -524,7 +530,7 @@ sub session_establish()
 			$heap->{'CONFIG'}->{'states'}->{'errorevent'},
 			+PCJ_SESSFAIL);
 	}
-
+	return;
 }
 		
 
@@ -533,26 +539,35 @@ sub build_tls_wheel()
 	my ($session, $kernel, $heap) = @_[SESSION, KERNEL, HEAP];
 	
 	delete $heap->{'server'};
-	my $socket = &gensym();
+	eval { $heap->{'socket'} = Client_SSLify( $heap->{'socket'} ) };
 
-	tie
-	(
-		*$socket, 
-		'POE::Component::Jabber::Client::XMPP::TLS',
-		$heap->{'socket'},
-	) or die $!;
-
-	$heap->{'socket'} = $socket;
+	if($@)
+	{
+		if($heap->{'SSLTRIES'} > 3)
+		{
+			warn 'Unable to negotiate SSL: '. $@;
+			$heap->{'SSLTRIES'} = 0;
+			$kernel->post($heap->{'CONFIG'}->{'state_parent'},
+				$heap->{'CONFIG'}->{'states'}->{'errorevent'},
+				+PCJ_SSLFAIL, $@);
+		
+		} else {
+			
+			$heap->{'SSLTRIES'}++;
+			$kernel->yield('build_tls_wheel');
+		}
+		
+	} else {
 	
-	$heap->{'server'} = POE::Wheel::ReadWrite->new
-	(
-		'Handle'		=> $heap->{'socket'},
-		'Filter'		=> POE::Filter::XML->new(),
-		'InputEvent'	=> 'got_server_input',
-		'ErrorEvent'	=> 'got_server_error',
-		'FlushedEvent'	=> 'got_server_flush',
-	);
-
+		$heap->{'server'} = POE::Wheel::ReadWrite->new
+		(
+			'Handle'		=> $heap->{'socket'},
+			'Filter'		=> POE::Filter::XML->new(),
+			'InputEvent'	=> 'got_server_input',
+			'ErrorEvent'	=> 'got_server_error',
+			'FlushedEvent'	=> 'got_server_flush',
+		);
+	}
 	return;
 }
 
@@ -565,11 +580,12 @@ sub server_error()
 	$kernel->post($heap->{'CONFIG'}->{'state_parent'},
 		$heap->{'CONFIG'}->{'states'}->{'errorevent'},
 		+PCJ_SOCKFAIL, $call, $code, $err);
+	return;
 }
 
 sub debug_message()
 {
-	print STDERR "\n", scalar (localtime (time)), ": ". shift ."\n";
+	warn "\n", scalar (localtime (time)), ': ' . shift(@_) ."\n";
 }
 
 1;
@@ -609,7 +625,7 @@ POE::Component::Jabber::Client::XMPP - A POE Component for XMPP Clients
 =head1 DESCRIPTION
 
 POE::Component::Jabber::Client::XMPP is a simple connection broker to enable
-communication using the IETF Proposed Standard XMPP. All of the steps to
+communication using the IETF Accepted Standard XMPP. All of the steps to
 initiate the connection, negotiate TLS, negotiate SASL, binding, and session
 establishment are all handled for the end developer. Once INITFINISH is fired
 the developer has a completed XMPP connection for which to send raw XML or

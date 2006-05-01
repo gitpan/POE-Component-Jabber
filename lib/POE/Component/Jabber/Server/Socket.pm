@@ -1,11 +1,11 @@
 package POE::Component::Jabber::Server::Socket;
-use POE::Preprocessor;
+use Filter::Template;
 const XNode POE::Filter::XML::Node
 use strict;
 use warnings;
 
 use POE qw/ Wheel::ReadWrite Driver::SysRW /;
-use POE::Component::Jabber::Server::Socket::STLS;
+use POE::Component::SSLify qw/ Server_SSLify SSLify_Options SSLify_GetCTX /;
 use POE::Filter::XML;
 use POE::Filter::XML::Node;
 use POE::Filter::XML::NS qw/ :JABBER /;
@@ -16,6 +16,8 @@ use MIME::Base64;
 ######################
 # Socket
 ######################
+
+our $VERSION = '1.21';
 
 sub new()
 {
@@ -75,6 +77,7 @@ sub build_socket()
 	$heap->{'last_active'} = $heap->{'birth'};
 	$heap->{'STAGE'} = 1;
 	$heap->{'tries'} = 0;
+	$heap->{'SSLTRIES'} = 0;
 
 }
 
@@ -82,20 +85,33 @@ sub step_tls()
 {
 	my ($session, $heap, $kernel) = @_[SESSION, HEAP, KERNEL];
 
-	my $socket = &gensym();
 	$heap->{'filter'}->reset();
 	delete $heap->{'s_wheel'};
-	
-	tie
-	(
-		*$socket,
-		'POE::Component::Jabber::Server::Socket::STLS',
-		$heap->{'socket'},
-		$heap->{'CONFIG'}->{'private'},
-		$heap->{'CONFIG'}->{'certificate'},
-	) or die $!;
 
-	$heap->{'socket'} = $socket;
+	eval { SSLify_Options( $heap->{'CONFIG'}->{'private'}, $heap->{'CONFIG'}->{'certificate'} ) };
+	
+	if($@)
+	{
+		die $@;
+	}
+
+	eval { $heap->{'socket'} = Server_SSLify( $heap->{'socket'} ) };
+
+	if($@)
+	{
+		if($heap->{'SSLTRIES'} > 3)
+		{
+			$kernel->yield('destroy_socket');
+		
+		} else {
+
+			$heap->{'SSLTRIES'}++;
+			$kernel->yield('step_tls');
+		}
+		return;
+	}
+		
+	
 	
 	$heap->{'s_wheel'} = POE::Wheel::ReadWrite->new(
 		'Handle'		=> $heap->{'socket'},

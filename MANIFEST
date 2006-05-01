@@ -1,27 +1,29 @@
-MANIFEST            This list of files
-LICENSE
-examples/LEGACYTester.pl
+Build.PL
+ChangeLog
 examples/COMPTester.pl
-examples/SERVERTester.pl
-examples/XMPPTester.pl
-examples/XMPPSimpleTester.pl
 examples/J2Tester.pl
-Makefile.PL
-test.pl
+examples/LEGACYTester.pl
+examples/SERVERTester.pl
+examples/XMPPSimpleTester.pl
+examples/XMPPTester.pl
 lib/POE/Component/Jabber.pm
-lib/POE/Component/Jabber/Error.pm
-lib/POE/Component/Jabber/Client/Legacy.pm
 lib/POE/Component/Jabber/Client/Component.pm
-lib/POE/Component/Jabber/Client/XMPP.pm
-lib/POE/Component/Jabber/Client/XMPP/TLS.pm
 lib/POE/Component/Jabber/Client/J2.pm
+lib/POE/Component/Jabber/Client/Legacy.pm
+lib/POE/Component/Jabber/Client/XMPP.pm
+lib/POE/Component/Jabber/Error.pm
+lib/POE/Component/Jabber/Server.pm
 lib/POE/Component/Jabber/Server/InputHandler.pm
-lib/POE/Component/Jabber/Server/RouteTable.pm
+lib/POE/Component/Jabber/Server/PresenceManager.pm
+lib/POE/Component/Jabber/Server/RosterTable.pm
 lib/POE/Component/Jabber/Server/RouteProcessor.pm
+lib/POE/Component/Jabber/Server/RouteTable.pm
 lib/POE/Component/Jabber/Server/SelfRouter.pm
 lib/POE/Component/Jabber/Server/Socket.pm
 lib/POE/Component/Jabber/Server/SocketServer.pm
-lib/POE/Component/Jabber/Server/Socket/CTLS.pm
-lib/POE/Component/Jabber/Server/Socket/STLS.pm
-META.yml                                 Module meta-data (added by MakeMaker)
-install/ExtUtils/AutoInstall.pm         AutoInstall incase we do not have one.
+LICENSE
+Makefile.PL
+MANIFEST			This list of files
+META.yml
+test.pl
+README

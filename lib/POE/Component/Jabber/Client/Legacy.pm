@@ -1,5 +1,5 @@
 package POE::Component::Jabber::Client::Legacy;
-use POE::Preprocessor;
+use Filter::Template;
 const XNode POE::Filter::XML::Node
 use warnings;
 use strict;
@@ -11,7 +11,7 @@ use POE::Filter::XML::Node;
 use POE::Filter::XML::NS qw/ :JABBER :IQ /;
 use Digest::SHA1 qw/ sha1_hex /;
 
-our $VERSION = '1.1';
+our $VERSION = '1.21';
 
 sub new()
 {
@@ -79,6 +79,7 @@ sub new()
 
 		ServerInput => \&init_input_handler,
 		ServerError => \&server_error,
+		ConnectError => \&connect_error,
 
 		InlineStates => {
 			output_handler => \&output_handler,
@@ -92,6 +93,16 @@ sub new()
 		Started => \&start,
 		Args => [ $args ],
 	);
+}
+
+sub connect_error()
+{
+	my ($kernel, $heap, $call, $code, $err) = @_[KERNEL, HEAP, ARG0..ARG2];
+
+	warn "Connect Error: $call: $code -> $err\n";
+	$kernel->post($heap->{'CONFIG'}->{'state_parent'},
+		$heap->{'CONFIG'}->{'states'}->{'errorevent'},
+		+PCJ_CONNFAIL, $call, $code, $err);
 }
 
 sub reconnect_to_server()
@@ -317,7 +328,7 @@ sub server_error()
 
 sub debug_message()
 {
-	print STDERR "\n", scalar (localtime (time)), ": ". shift ."\n";
+	warn "\n", scalar (localtime (time)), ': '. shift(@_) ."\n";
 }
 
 1;
@@ -357,7 +368,7 @@ POE::Component::Jabber::Client::Legacy - A POE Component for communicating over 
 =head1 DESCRIPTION
 
 POE::Component::Jabber::Client::Legacy is a simple connection broker to enable
-communication using the legacy Jabber protocol prior to the IETF Proposed
+communication using the legacy Jabber protocol prior to the IETF Approved
 Standard XMPP. All of the steps to initiate the connection and authenticate
 inband with plain text or DIGEST-SHA1 are handled for the end developer. Once
 INITFINISH is fired the developer has a completed Jabber connection for which
