@@ -1,3 +1,10 @@
+2007-01-20 nperez <nperez@cpan.org>
+	* Major revision: 2.0
+	* Reorganized guts into object_states and extensible Protocol specifics
+	* Full documentation for all included modules
+	* Examples reworked with documentation inline
+	* Automated testing written to cover all Protocol dialects
+
 2006-04-30 nperez <nperez@cpan.org>
 	* Bumped version to: 1.21
 	* New handlers for failed connections

@@ -1,6 +1,6 @@
 ---
 name: POE-Component-Jabber
-version: 1.21
+version: 2.0
 author: []
 abstract: A POE Component for communicating over Jabber
 license: gpl
@@ -11,49 +11,38 @@ requires:
   Digest::SHA1: 2.11
   Filter::Template: 1.01
   MIME::Base64: 3.07
-  POE: 0.34_01
-  POE::Component::SSLify: 0.04
-  POE::Filter::XML: 0.29
-  perl: 5.8.1
+  POE: 0.9500
+  POE::Component::SSLify: 0.06
+  POE::Filter::XML: 0.31
+  perl: 5.8.8
 provides:
   POE::Component::Jabber:
     file: lib/POE/Component/Jabber.pm
-    version: 1.21
-  POE::Component::Jabber::Client::Component:
-    file: lib/POE/Component/Jabber/Client/Component.pm
-    version: 1.21
-  POE::Component::Jabber::Client::J2:
-    file: lib/POE/Component/Jabber/Client/J2.pm
-    version: 1.21
-  POE::Component::Jabber::Client::Legacy:
-    file: lib/POE/Component/Jabber/Client/Legacy.pm
-    version: 1.21
-  POE::Component::Jabber::Client::XMPP:
-    file: lib/POE/Component/Jabber/Client/XMPP.pm
-    version: 1.21
+    version: 2.0
   POE::Component::Jabber::Error:
     file: lib/POE/Component/Jabber/Error.pm
-    version: 1.21
-  POE::Component::Jabber::Server:
-    file: lib/POE/Component/Jabber/Server.pm
-    version: 1.21
-  POE::Component::Jabber::Server::InputHandler:
-    file: lib/POE/Component/Jabber/Server/InputHandler.pm
-  POE::Component::Jabber::Server::PresenceManager:
-    file: lib/POE/Component/Jabber/Server/PresenceManager.pm
-  POE::Component::Jabber::Server::RosterTable:
-    file: lib/POE/Component/Jabber/Server/RosterTable.pm
-  POE::Component::Jabber::Server::RouteProcessor:
-    file: lib/POE/Component/Jabber/Server/RouteProcessor.pm
-  POE::Component::Jabber::Server::RouteTable:
-    file: lib/POE/Component/Jabber/Server/RouteTable.pm
-  POE::Component::Jabber::Server::SelfRouter:
-    file: lib/POE/Component/Jabber/Server/SelfRouter.pm
-  POE::Component::Jabber::Server::Socket:
-    file: lib/POE/Component/Jabber/Server/Socket.pm
-    version: 1.21
-  POE::Component::Jabber::Server::SocketServer:
-    file: lib/POE/Component/Jabber/Server/SocketServer.pm
+    version: 2.0
+  POE::Component::Jabber::J14:
+    file: lib/POE/Component/Jabber/J14.pm
+    version: 2.0
+  POE::Component::Jabber::J2:
+    file: lib/POE/Component/Jabber/J2.pm
+    version: 2.0
+  POE::Component::Jabber::Legacy:
+    file: lib/POE/Component/Jabber/Legacy.pm
+    version: 2.0
+  POE::Component::Jabber::Protocol:
+    file: lib/POE/Component/Jabber/Protocol.pm
+    version: 2.0
+  POE::Component::Jabber::ProtocolFactory:
+    file: lib/POE/Component/Jabber/ProtocolFactory.pm
+    version: 2.0
+  POE::Component::Jabber::Status:
+    file: lib/POE/Component/Jabber/Status.pm
+    version: 2.0
+  POE::Component::Jabber::XMPP:
+    file: lib/POE/Component/Jabber/XMPP.pm
+    version: 2.0
 generated_by: Module::Build version 0.28
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

@@ -4,20 +4,20 @@ use strict;
 
 use constant 
 {
-	'PCJ_SOCKFAIL' => 0,
-	'PCJ_SOCKDISC' => 1,
+	'PCJ_SOCKETFAIL' => 0,
+	'PCJ_SOCKETDISCONNECT' => 1,
 	'PCJ_AUTHFAIL' => 2,
 	'PCJ_BINDFAIL' => 3,
-	'PCJ_SESSFAIL' => 4,
+	'PCJ_SESSIONFAIL' => 4,
 	'PCJ_SSLFAIL'  => 5,
-	'PCJ_CONNFAIL' => 6,
+	'PCJ_CONNECTFAIL' => 6,
 };
 
 require Exporter;
-our $VERSION = '1.21';
+our $VERSION = '2.0';
 our @ISA = qw/ Exporter /;
-our @EXPORT = qw/ PCJ_SOCKFAIL PCJ_SOCKDISC 
-	PCJ_AUTHFAIL PCJ_BINDFAIL PCJ_SESSFAIL PCJ_SSLFAIL PCJ_CONNFAIL/;
+our @EXPORT = qw/ PCJ_SOCKETFAIL PCJ_SOCKETDISCONNECT PCJ_AUTHFAIL PCJ_BINDFAIL
+	PCJ_SESSIONFAIL PCJ_SSLFAIL PCJ_CONNECTFAIL/;
 
 1;
 
@@ -37,15 +37,19 @@ POE::Component::Jabber::Error - Error constants for use in PCJ
  {
  	my $error = $_[ARG0];
 
-	if($error == +PCJ_SOCKFAIL)
+	if($error == +PCJ_SOCKETFAIL)
 	{
 		my ($call, $code, $err) = @_[ARG1..ARG3];
 		print "Socket error: $call, $code, $err\n";
 	
-	} elsif ($error == +PCJ_SOCKDISC) {
+	} elsif ($error == +PCJ_SOCKETDISCONNECT) {
 
 		print "We got disconneted\n";
 	
+	} elsif ($error == +PCJ_CONNECTFAIL) {
+
+		print "We failed to connect\n";
+
 	} elsif ($error == +PCJ_AUTHFAIL) {
 
 		print "Failed to authenticate\n";
@@ -54,7 +58,7 @@ POE::Component::Jabber::Error - Error constants for use in PCJ
 
 		print "Failed to bind a resource\n"; # XMPP/J2 Only
 
-	} elsif ($error == +PCJ_SESSFAIL) {
+	} elsif ($error == +PCJ_SESSIONFAIL) {
 
 		print "Failed to establish a session\n"; # XMPP Only
 	
@@ -76,18 +80,20 @@ Simply `use`ing the class imports all of the constants
 
 =over 4
 
-=item PCJ_SOCKFAIL
+=item PCJ_SOCKETFAIL
 
 There has been some sort of socket error. ARG1..ARG3 are what 
-Client::TCP gave to the Client class.
+the POE::Wheel::ReadWrite gave to us.
 
-See POE::Component::Client::TCP for further details on what is returned.
+See POE::Wheel::ReadWrite for further details on what is returned.
 
-=item PCJ_SOCKDISC
+=item PCJ_SOCKETDISCONNECT
 
-The socket has been disconnected according to Client::TCP.
+The socket has been disconnected.
 
-See POE::Component::Client::TCP for further details.
+=item PCJ_CONNECTFAIL
+
+Failed to establish a TCP connection.
 
 =item PCJ_AUTHFAIL
 
@@ -97,7 +103,7 @@ Authentication has failed.
 
 Resource/Domain binding has failed. XMPP/J2 Only
 
-=item PCJ_SESSFAIL
+=item PCJ_SESSIONFAIL
 
 Session establishment has failed. XMPP Only
 
@@ -116,7 +122,7 @@ subject to change.
 
 =head1 AUTHORS AND COPYRIGHT
 
-Copyright (c) 2004,2005 Nicholas Perez. Released and distributed under the GPL.
+Copyright (c) 2004 - 2007 Nicholas Perez. Released and distributed under the GPL.
 
 =cut
 
