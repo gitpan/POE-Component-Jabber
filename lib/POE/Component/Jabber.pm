@@ -37,7 +37,7 @@ use constant
 
 };
 
-our $VERSION = '2.0';
+our $VERSION = '2.01';
 
 sub new()
 {

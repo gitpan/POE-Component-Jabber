@@ -1,3 +1,8 @@
+2007-01-26 nperez <nperez@cpan.org>
+	* Maint revision: 2.01
+	* Automated tests are still very new to me. Fix problems with defaults.
+	* Update all module version numbers to stay in sync
+
 2007-01-20 nperez <nperez@cpan.org>
 	* Major revision: 2.0
 	* Reorganized guts into object_states and extensible Protocol specifics

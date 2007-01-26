@@ -31,13 +31,13 @@ if (grep /^--default$/, @ARGV) {
 
 } else {
 
-	$ret = Module::Build->prompt($prompt, 'y');
+	$ret = Module::Build->prompt($prompt, 'n');
 }
 
 if($ret =~ /^y/i)
 {	
 	open(my $file, '>', 'run_network_tests');
-	$ret = Module::Build->prompt($prompt_components, 'y');
+	$ret = Module::Build->prompt($prompt_components, 'n');
 	
 	
 	if($ret =~ /^y/i)

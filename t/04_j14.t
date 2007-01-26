@@ -27,6 +27,12 @@ if(-e 'run_network_tests')
 my $file_config = {};
 
 my @lines = $file->getlines();
+if(!@lines)
+{
+	SKIP: { skip('Component tests were declined', 12); }
+	exit 1;
+}
+
 for(0..$#lines)
 {	
 	my $i = $_;
