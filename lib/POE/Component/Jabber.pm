@@ -37,7 +37,7 @@ use constant
 
 };
 
-our $VERSION = '2.01';
+our $VERSION = '2.02';
 
 sub new()
 {
@@ -372,7 +372,7 @@ sub _start()
 sub _stop()
 {
 	my ($kernel, $self) = @_[KERNEL, OBJECT];
-	$kernel->alias_remove();
+	$kernel->alias_remove($_) for $kernel->alias_list();
 	return;
 }
 
@@ -845,7 +845,7 @@ POE::Component::Jabber - A POE Component for communicating over Jabber
 
  POE::Component::Jabber->new(
    IP => 'jabber.server',
-   PORT => '5222'
+   PORT => '5222',
    HOSTNAME => 'jabber.server',
    USERNAME => 'username',
    PASSWORD => 'password',
