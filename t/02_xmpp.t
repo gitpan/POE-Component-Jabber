@@ -17,8 +17,8 @@ my $config =
 	IP => 'jabber.org',
 	Port => '5222',
 	Hostname => 'jabber.org',
-	Username => 'PCJTester',
-	Password => 'PCJTester',
+	Username => 'poecomponentjabber',
+	Password => 'poecomponentjabber',
 	ConnectionType => +XMPP,
 	States => {
 		StatusEvent => 'status_event',
@@ -52,7 +52,7 @@ POE::Session->create
 				} else {
 					
 					SKIP: { skip('Network tests were declined', 20); }
-					exit 1;
+					exit 0;
 				}
 			},
 		'status_event' =>
@@ -237,4 +237,4 @@ POE::Session->create
 
 POE::Kernel->run();
 
-exit 1;
+exit 0;

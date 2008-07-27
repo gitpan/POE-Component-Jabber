@@ -5,7 +5,7 @@ use warnings;
 use strict;
 
 use POE qw/ Wheel::ReadWrite /;
-use POE::Component::SSLify qw/ Client_SSLify /;
+use POE::Component::Jabber::Utility::SSLify qw/ Client_SSLify /;
 use POE::Component::Jabber::Error;
 use POE::Component::Jabber::Status;
 use POE::Filter::XML;
@@ -17,7 +17,7 @@ use Authen::SASL;
 
 use base('POE::Component::Jabber::Protocol');
 
-our $VERSION = '2.02';
+our $VERSION = '2.03';
 
 sub get_version()
 {
