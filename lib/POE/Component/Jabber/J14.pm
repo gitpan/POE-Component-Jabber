@@ -1,12 +1,10 @@
 package POE::Component::Jabber::J14;
-use Filter::Template;
-const XNode POE::Filter::XML::Node
 use warnings;
 use strict;
 
-use POE qw/ Wheel::ReadWrite Component::Client::TCP /;
-use POE::Component::Jabber::Error;
-use POE::Component::Jabber::Status;
+use 5.010;
+use POE;
+use POE::Component::Jabber::Events;
 use POE::Filter::XML;
 use POE::Filter::XML::Node;
 use POE::Filter::XML::NS qw/ :JABBER :IQ /;
@@ -14,7 +12,7 @@ use Digest::SHA1 qw/ sha1_hex /;
 
 use base('POE::Component::Jabber::Protocol');
 
-our $VERSION = '2.03';
+our $VERSION = '3.00';
 
 sub get_version()
 {
@@ -40,10 +38,10 @@ sub set_auth()
 {
 	my ($kernel, $heap, $self) = @_[KERNEL, HEAP, OBJECT];
 
-	my $node = XNode->new('handshake');
+	my $node = POE::Filter::XML::Node->new('handshake');
 	my $config = $heap->config();
-	$node->data(sha1_hex($self->{'sid'}.$config->{'password'}));
-	$kernel->post($heap->parent(), $heap->status(), +PCJ_AUTHNEGOTIATE);
+	$node->appendText(sha1_hex($self->{'sid'}.$config->{'password'}));
+	$kernel->post($heap->events(), +PCJ_AUTHNEGOTIATE);
 	$kernel->yield('output_handler', $node, 1);
 	return;
 }
@@ -52,24 +50,31 @@ sub init_input_handler()
 {
 	my ($kernel, $heap, $self, $node) = @_[KERNEL, HEAP, OBJECT, ARG0];
 	
-	if($node->name() eq 'handshake')
-	{	
-		my $config = $heap->config();
-		$kernel->post($heap->parent(), $heap->status(), +PCJ_AUTHSUCCESS);
-		$kernel->post($heap->parent(), $heap->status(), +PCJ_INIT_FINISHED);
-		$heap->jid($config->{'hostname'});
-		$heap->relinquish_states();
+    given($node->nodeName())
+    {
+        when('handshake')
+        {	
+            my $config = $heap->config();
+            $kernel->post($heap->events(), +PCJ_AUTHSUCCESS);
+            $kernel->post($heap->events(), +PCJ_READY);
+            $heap->jid($config->{'hostname'});
+            $heap->relinquish_states();
 
-	} elsif($node->name() eq 'stream:stream') {
-	
-		$self->{'sid'} = $node->attr('id');
-		$kernel->yield('set_auth');
-	
-	} else {
+        }
+        
+        when('stream:stream')
+        {
+            $self->{'sid'} = $node->getAttribute('id');
+            $kernel->yield('set_auth');
+        
+        }
 
-		$heap->debug_message('Unknown state: ' . $node->to_str());
-		$kernel->post($heap->parent(), $heap->error(), +PCJ_AUTHFAIL);
-	}
+        default
+        {
+            $heap->debug_message('Unknown state: ' . $node->toString());
+            $kernel->post($heap->events(), +PCJ_AUTHFAIL);
+        }
+    }
 }
 
 1;
@@ -112,6 +117,8 @@ This event constructs and sends the <handshake/> element for authentication.
 This is out main entry point that PCJ uses to send us all of the input. It
 handles the authentication response.
 
+=back
+
 =head1 NOTES AND BUGS
 
 This only implements the jabber:component:accept namespace (ie. the component
@@ -121,8 +128,12 @@ Also be aware that before this protocol was documented as an XEP, it was widely
 implemented with loose rules. I conform to this document. If there is a problem
 with the implementation against older server implementations, let me know.
 
+The underlying backend has changed this release to now use a new Node
+implementation based on XML::LibXML::Element. Please see POE::Filter::XML::Node
+documentation for the relevant API changes.
+
 =head1 AUTHOR
 
-Copyright (c) 2003-2007 Nicholas Perez. Distributed under the GPL.
+Copyright (c) 2003-2009 Nicholas Perez. Distributed under the GPL.
 
 =cut

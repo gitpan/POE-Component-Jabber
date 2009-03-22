@@ -16,10 +16,10 @@ use constant
 	'XMPP'					=> 4,
 };
 
-require Exporter;
-our $VERSION = '2.03';
-our @ISA = qw/ Exporter /;
+use base('Exporter');
 our @EXPORT = qw/ JABBERD14_COMPONENT JABBERD20_COMPONENT LEGACY XMPP /;
+
+our $VERSION = '3.00';
 
 sub get_guts($)
 {
@@ -115,6 +115,6 @@ receives an invalid argument.
 
 =head1 AUTHOR
 
-(c) Copyright 2007 Nicholas Perez. Released under the GPL.
+(c) Copyright 2007-2009 Nicholas Perez. Released under the GPL.
 
 =cut

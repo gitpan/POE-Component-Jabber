@@ -1,13 +1,11 @@
 package POE::Component::Jabber::J2;
-use Filter::Template;
-const XNode POE::Filter::XML::Node
 use warnings;
 use strict;
 
+use 5.010;
 use POE qw/ Wheel::ReadWrite /;
-use POE::Component::Jabber::Utility::SSLify qw/ Client_SSLify /;
-use POE::Component::Jabber::Error;
-use POE::Component::Jabber::Status;
+use POE::Component::SSLify qw/ Client_SSLify /;
+use POE::Component::Jabber::Events;
 use POE::Filter::XML;
 use POE::Filter::XML::Node;
 use POE::Filter::XML::NS qw/ :JABBER :IQ /;
@@ -17,7 +15,7 @@ use Authen::SASL;
 
 use base('POE::Component::Jabber::Protocol');
 
-our $VERSION = '2.03';
+our $VERSION = '3.00';
 
 sub new()
 {   
@@ -65,7 +63,7 @@ sub set_auth()
 
 	$self->{'challenge'} = $sasl;
 
-	my $node = XNode->new('auth',
+	my $node = POE::Filter::XML::Node->new('auth',
 	['xmlns', +NS_XMPP_SASL, 'mechanism', $mech]);
 
 	$kernel->yield('output_handler', $node, 1);
@@ -82,7 +80,7 @@ sub challenge_response()
 	if ($config->{'debug'}) {
 		$heap->debug_message(	
 			"Server sent a challenge.  Decoded Challenge:\n" .
-			decode_base64( $node->data() )
+			decode_base64( $node->textContent() )
 		);
 	}
 	
@@ -90,7 +88,7 @@ sub challenge_response()
 	my $conn = $sasl->client_new("xmpp", $config->{'hostname'});
 	$conn->client_start();
 
-	my $step = $conn->client_step(decode_base64($node->data()));
+	my $step = $conn->client_step(decode_base64($node->textContent()));
 
 	if ($config->{'debug'}) {
 		$heap->debug_message("Decoded Response:\n$step");
@@ -103,8 +101,8 @@ sub challenge_response()
 		$step =~ s/\s+//go;
 	}
 
-	my $response = XNode->new('response', ['xmlns', +NS_XMPP_SASL]);
-	$response->data($step);
+	my $response = POE::Filter::XML::Node->new('response', ['xmlns', +NS_XMPP_SASL]);
+	$response->appendText($step) if defined($step);
 
 	$kernel->yield('output_handler', $response, 1);
 }
@@ -113,13 +111,13 @@ sub init_input_handler()
 {
 	my ($kernel, $heap, $self, $node) = @_[KERNEL, HEAP, OBJECT, ARG0];
 	
-	my $attrs = $node->get_attrs();
+	my $attrs = $node->getAttributes();
 	my $config = $heap->config();
 	my $pending = $heap->pending();
 
 	if ($config->{'debug'})
 	{
-		$heap->debug_message("Recd: ".$node->to_str());
+		$heap->debug_message("Recd: ".$node->toString());
 	}
 	
 	if(exists($attrs->{'id'}))
@@ -130,94 +128,115 @@ sub init_input_handler()
 			$kernel->post($array->[0], $array->[1], $node);
 			return;
 		}
-	} elsif($node->name() eq 'stream:stream') {
+	} 
+    given($node->nodeName())
+    {
+        when('stream:stream') 
+        {
+            $self->{'sid'} = $node->getAttribute('id');
 
-		$self->{'sid'} = $node->attr('id');
+        } 
+        
+        when('challenge') 
+        {    
+            $kernel->yield('challenge_response', $node);
 
-	} elsif($node->name() eq 'challenge') {
-		
-		$kernel->yield('challenge_response', $node);
+        }
+        
+        when('failure')
+        {
+            if($node->getAttribute('xmlns') eq +NS_XMPP_SASL)
+            {
+                $heap->debug_message('SASL Negotiation Failed');
+                $kernel->yield('shutdown');
+                $kernel->post($heap->events(), +PCJ_AUTHFAIL);
+            }
+            else
+            {
+                $heap->debug_message('Unknown Failure: ' . $node->toString());
+            }
+        
+        }
+        
+        when('stream:features') 
+        {
+            given($node->getChildrenHash())
+            {
+                when('starttls')
+                {
+                    my $starttls = POE::Filter::XML::Node->new('starttls', ['xmlns', +NS_XMPP_TLS]);
+                    $kernel->yield('output_handler', $starttls, 1);
+                    $kernel->post($heap->events(), +PCJ_SSLNEGOTIATE);
+                    $self->{'STARTTLS'} = 1;
+                
+                } 
+                when('mechanisms')
+                {    
+                    if(!defined($self->{'STARTTLS'}))
+                    {
+                        $kernel->post($heap->events(), +PCJ_SSLFAIL);
+                        $kernel->yield('shutdown');
+                        return;
+                    }
+                    
+                    foreach($_->{'mechanisms'}->[0]->getChildrenByTagName('*'))
+                    {
+                        when($_->textContent() eq 'DIGEST-MD5' or $_->textContent() eq 'PLAIN')
+                        {
+                            $kernel->yield('set_auth', $_->textContent());
+                            $kernel->post($heap->events(), +PCJ_AUTHNEGOTIATE);
+                            return;
+                        }
+                    }
+                    
+                    $heap->debug_message('Unknown mechanism: '.$node->toString());
+                    $kernel->yield('shutdown');
+                    $kernel->post($heap->events(), +PCJ_AUTHFAIL);
+                
+                } 
 
-	} elsif($node->name() eq 'failure' and 
-		$node->attr('xmlns') eq +NS_XMPP_SASL) {
+                when(sub() { !keys %$_; })
+                {
+                    if(!defined($self->{'STARTTLS'}))
+                    {
+                        $kernel->post($heap->events(), +PCJ_SSLFAIL);
+                        $kernel->yield('shutdown');
+                        return;
+                    }
 
-		$heap->debug_message('SASL Negotiation Failed');
-		$kernel->yield('shutdown');
-		$kernel->post($heap->parent(), $heap->error(), +PCJ_AUTHFAIL);
-	
-	} elsif($node->name() eq 'stream:features') {
+                    my $bind = POE::Filter::XML::Node->new
+                    (
+                        'bind' , 
+                        [
+                            'xmlns', +NS_JABBER_COMPONENT,
+                            'name', $config->{'binddomain'} || $config->{'username'} . '.' . $config->{'hostname'}
+                        ]
+                    );
+                    
+                    if(defined($config->{'bindoption'}))
+                    {
+                        $bind->appendChild($config->{'bindoption'});
+                    }
+                    
+                    $kernel->yield('return_to_sender', 'binding', $bind);
+                    $kernel->post($heap->events(), +PCJ_BINDNEGOTIATE);
+                }
+            }
 
-		my $clist = $node->get_children_hash();
+        }
 
-		if(exists($clist->{'starttls'}))
-		{
-			my $starttls = XNode->new('starttls', ['xmlns', +NS_XMPP_TLS]);
-			$kernel->yield('output_handler', $starttls, 1);
-			$kernel->post($heap->parent(), $heap->status(), +PCJ_SSLNEGOTIATE);
-			$self->{'STARTTLS'} = 1;
-		
-		} elsif(exists($clist->{'mechanisms'})) {
-			
-			if(!defined($self->{'STARTTLS'}))
-			{
-				$kernel->post($heap->parent(), $heap->error(), +PCJ_SSLFAIL);
-				$kernel->yield('shutdown');
-				return;
-			}
+        when('proceed') 
+        {
+            $kernel->yield('build_tls_wheel');
+            $kernel->yield('initiate_stream');
+        } 
 
-			my $mechs = $clist->{'mechanisms'}->get_sort_children();
-			foreach my $mech (@$mechs)
-			{
-				if($mech->data() eq 'DIGEST-MD5')
-				{
-					$kernel->yield('set_auth', $mech->data());
-					$kernel->post(
-						$heap->parent(),
-						$heap->status(),
-						+PCJ_AUTHNEGOTIATE);
-					return;
-				}
-			}
-			
-			$heap->debug_message('Unknown mechanism: '.$node->to_str());
-			$kernel->yield('shutdown');
-			$kernel->post($heap->parent(), $heap->error(), +PCJ_AUTHFAIL);
-		
-		} elsif(!keys %$clist) {
-			
-			if(!defined($self->{'STARTTLS'}))
-			{
-				$kernel->post($heap->parent(), $heap->error(), +PCJ_SSLFAIL);
-				$kernel->yield('shutdown');
-				return;
-			}
-
-			my $bind = XNode->new('bind' , ['xmlns', +NS_JABBER_COMPONENT])
-				->attr(
-					'name', 
-					$config->{'binddomain'} || 
-					$config->{'username'} . '.' . $config->{'hostname'}
-					);
-			
-			if(defined($config->{'bindoption'}))
-			{
-				$bind->insert_tag($config->{'bindoption'});
-			}
-			
-			$kernel->yield('return_to_sender', 'binding', $bind);
-			$kernel->post($heap->parent(), $heap->status(), +PCJ_BINDNEGOTIATE);
-		}
-
-	} elsif($node->name() eq 'proceed') {
-
-		$kernel->yield('build_tls_wheel');
-		$kernel->yield('initiate_stream');
-	
-	} elsif($node->name() eq 'success') {
-
-		$kernel->yield('initiate_stream');
-		$kernel->post($heap->parent(), $heap->status(), +PCJ_AUTHSUCCESS);
-	}
+        when('success') 
+        {
+            $kernel->yield('initiate_stream');
+            $kernel->post($heap->events(), +PCJ_AUTHSUCCESS);
+        }
+    }
 
 	return;
 }
@@ -226,23 +245,23 @@ sub binding()
 {
 	my ($kernel, $heap, $node) = @_[KERNEL, HEAP, ARG0];
 
-	my $attr = $node->attr('error');
+	my $attr = $node->getAttribute('error');
 	my $config = $heap->config();
 
 	if(!$attr)
 	{
 		$heap->relinquish_states();
-		$kernel->post($heap->parent(),$heap->status(), +PCJ_BINDSUCCESS);
-		$kernel->post($heap->parent(),$heap->status(), +PCJ_INIT_FINISHED);
+		$kernel->post($heap->events(), +PCJ_BINDSUCCESS);
+		$kernel->post($heap->events(), +PCJ_READY);
 		$heap->jid($config->{'binddomain'} ||
 			$config->{'username'} . '.' . $config->{'hostname'});
 	
 	} else {
 
 		$heap->debug_message('Unable to BIND, yet binding required: '.
-			$node->to_str());
+			$node->toString());
 		$kernel->yield('shutdown');
-		$kernel->post($heap->parent(), $heap->error(), +PCJ_BINDFAIL);
+		$kernel->post($heap->events(), +PCJ_BINDFAIL);
 	}
 }
 		
@@ -259,7 +278,7 @@ sub build_tls_wheel()
 		{
 			$heap->debug_message('Unable to negotiate SSL: '. $@);
 			$self->{'SSLTRIES'} = 0;
-			$kernel->post($heap->parent(), $heap->error(), +PCJ_SSLFAIL, $@);
+			$kernel->post($heap->events(), +PCJ_SSLFAIL, $@);
 
 		} else {
 
@@ -278,7 +297,7 @@ sub build_tls_wheel()
 		'ErrorEvent'	=> 'server_error',
 		'FlushedEvent'	=> 'flushed_event',
 	));
-	$kernel->post($heap->parent(), $heap->status(), +PCJ_SSLSUCCESS);
+	$kernel->post($heap->events(), +PCJ_SSLSUCCESS);
 
 	return;
 }
@@ -337,15 +356,21 @@ This handles the subsequent SASL authentication steps.
 
 This handles the domain binding
 
+=back
+
 =head1 NOTES AND BUGS
 
 This Protocol may implement the spec, but this spec hasn't been touched in 
 quite some time. If for some reason my implementation fails against a
 particular jabberd2 version, please let me know.
 
+The underlying backend has changed this release to now use a new Node
+implementation based on XML::LibXML::Element. Please see POE::Filter::XML::Node
+documentation for the relevant API changes.
+
 =head1 AUTHOR
 
-Copyright (c) 2003-2007 Nicholas Perez. Distributed under the GPL.
+Copyright (c) 2003-2009 Nicholas Perez. Distributed under the GPL.
 
 =cut
 
